@@ -1,0 +1,52 @@
+name: Refresh dashboard
+
+on:
+  schedule:
+    - cron: "7 * * * *"      # every hour at :07 (GitHub may delay scheduled runs by a few minutes)
+  workflow_dispatch: {}        # lets you press "Run workflow" manually
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Build report (fresh data, no cache)
+        env:
+          PERPLEXITY_API_KEY: ${{ secrets.PERPLEXITY_API_KEY }}   # optional; leave unset to skip TipRanks
+        run: python -m stockscreener run --refresh
+
+      - name: Assemble site
+        run: |
+          mkdir -p site
+          cp output/report.html site/index.html
+          cp output/ranked.csv site/ranked.csv
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deploy
+        uses: actions/deploy-pages@v4

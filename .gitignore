@@ -1,0 +1,5 @@
+.venv/
+data/
+output/*
+!output/backtest.md
+__pycache__/
