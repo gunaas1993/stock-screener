@@ -18,8 +18,19 @@ revenue/EPS growth, 12-1m / 6m / 3m momentum, analyst rating, Zacks Rank, Finviz
 estimate revisions, upgrades/downgrades, earnings-surprise history, next earnings date.
 
 ## Buy Score (weights in `stockscreener/config.py`)
-upside 25% · momentum 25% · value 20% · growth 15% · consensus 15%.
+upside 20% · momentum 20% · value 20% · growth 15% · quality 15% · consensus 10%.
 Analyst upside is shrunk when few analysts cover the stock or they disagree, and capped at +60%.
+Quality = net margin, free-cash-flow margin, margin trend, size of the latest EPS beat.
+
+## Quarterly view and the 5-point checklist
+Every listed stock shows 5 quarters of revenue (sparkline), YoY growth, latest EPS beat %, net margin and FCF margin.
+Click a row for the full quarter-by-quarter table. The checklist (P R E C M) = cheap vs sector, revenue +10%,
+EPS beat >= 2%, positive cash flow, net margin >= 10%. Both tables load sorted by Buy Score, highest first.
+
+## Hourly refresh
+`.github/workflows/refresh.yml` ticks every 10 minutes; a cheap check job rebuilds only when the live page is
+older than 50 minutes. (GitHub throttles scheduled workflows on free repos, so a plain hourly cron often fires
+only every 4-8 hours.) Pushes and the "Run workflow" button always rebuild.
 
 ## Optional: TipRanks Smart Score via Perplexity
 TipRanks renders its score client-side, so it can't be scraped directly.

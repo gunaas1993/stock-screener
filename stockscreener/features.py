@@ -87,9 +87,9 @@ def _reported(ed: pd.DataFrame | None, asof: pd.Timestamp | None) -> pd.DataFram
 def surprise_stats(ed: pd.DataFrame | None, asof: pd.Timestamp | None = None, n: int = 4) -> dict:
     rep = _reported(ed, asof).tail(n)
     if len(rep) < 2:
-        return {"surprise_avg": np.nan, "beat_rate": np.nan}
+        return {"surprise_avg": np.nan, "beat_rate": np.nan, "surprise_last": np.nan}
     s = (rep["Surprise(%)"] / 100.0).clip(-0.5, 0.5)
-    return {"surprise_avg": float(s.mean()), "beat_rate": float((s > 0).mean())}
+    return {"surprise_avg": float(s.mean()), "beat_rate": float((s > 0).mean()), "surprise_last": float(s.iloc[-1])}
 
 
 def ttm_eps_stats(ed: pd.DataFrame | None, asof: pd.Timestamp) -> dict:

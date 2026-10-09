@@ -1,25 +1,53 @@
 name: Refresh dashboard
 
+# GitHub drops or delays many scheduled runs on free public repos (a plain hourly cron
+# often fires only every 4-8 hours). So we tick every 10 minutes, and a cheap "check" job
+# decides whether the live page is older than ~50 minutes. Only then do we do the real build.
+# Result: a refresh roughly every hour even when GitHub skips most ticks.
 on:
   schedule:
-    - cron: "7 * * * *"      # every hour at :07 (GitHub may delay scheduled runs by a few minutes)
-  workflow_dispatch: {}        # lets you press "Run workflow" manually
+    - cron: "*/10 * * * *"
+  workflow_dispatch: {}        # "Run workflow" button: always builds
   push:
-    branches: [main]
+    branches: [main]           # every push: always builds
 
 permissions:
   contents: read
   pages: write
   id-token: write
 
-concurrency:
-  group: pages
-  cancel-in-progress: false
+env:
+  MAX_AGE_MINUTES: "50"
 
 jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    outputs:
+      stale: ${{ steps.age.outputs.stale }}
+    steps:
+      - id: age
+        run: |
+          if [ "${{ github.event_name }}" != "schedule" ]; then
+            echo "Manual/push run -> build"; echo "stale=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          url="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/?nocache=$(date +%s)"
+          ts=$(curl -fsS --max-time 20 "$url" | grep -o '"generated": "[^"]*"' | head -1 | cut -d'"' -f4 || true)
+          if [ -z "$ts" ]; then
+            echo "Could not read live timestamp -> build"; echo "stale=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          age=$(( ( $(date -u +%s) - $(date -u -d "$ts" +%s) ) / 60 ))
+          echo "Live page was generated $age min ago (limit $MAX_AGE_MINUTES)"
+          if [ "$age" -ge "$MAX_AGE_MINUTES" ]; then echo "stale=true" >> "$GITHUB_OUTPUT"; else echo "stale=false" >> "$GITHUB_OUTPUT"; fi
+
   build-and-deploy:
+    needs: check
+    if: needs.check.outputs.stale == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    concurrency:
+      group: pages
+      cancel-in-progress: false
     environment:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}

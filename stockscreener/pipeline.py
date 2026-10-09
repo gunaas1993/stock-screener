@@ -87,7 +87,7 @@ def _stage1(universe: pd.DataFrame, refresh: bool) -> pd.DataFrame:
     df["adj_upside"] = features.adjusted_upside(df["price"], df["target_mean"], df["n_analysts"].fillna(0), df["target_high"], df["target_low"])
     base_eps = df["fwd_eps"].where(df["fwd_eps"].notna(), df["eps"])
     df["earn_yield"] = base_eps / df["price"]
-    df["fcf_yield"] = df["fcf"] / df["mcap"]
+    df["fcf_yield"] = (df["fcf"] / df["mcap"]).where(df["sector"] != "Financials")  # bank "free cash flow" is meaningless
     df["fwd_eps_growth"] = ((df["fwd_eps"] / df["eps"] - 1).where(df["eps"] > 0)).clip(-1, 3)
     df["rev_growth"] = df["rev_growth"].clip(-0.5, 2.0)
     df["eps_growth"] = df["eps_growth"].clip(-1.0, 3.0)
@@ -105,6 +105,10 @@ def _stage2(df: pd.DataFrame, refresh: bool) -> pd.DataFrame:
 
     df = df.drop(columns=[c for c in extra.columns if c != "ticker" and c in df.columns]).merge(extra, on="ticker", how="left")
     df["stage2"] = df["ticker"].isin(tickers)
+    fin = df["sector"] == "Financials"
+    for c in ("fcf_margin", "ocf_pos"):
+        if c in df:
+            df.loc[fin, c] = np.nan
 
     # Second consensus opinion: blend Finviz target / recommendation with Yahoo's when available.
     t = df[["target_mean", "fv_target"]].apply(pd.to_numeric, errors="coerce")
@@ -114,6 +118,28 @@ def _stage2(df: pd.DataFrame, refresh: bool) -> pd.DataFrame:
     df["adj_upside"] = features.adjusted_upside(df["price"], df["target_avg"], df["n_analysts"].fillna(0), df["target_high"], df["target_low"])
     df["rec_score"] = 5.0 - df[["rec_mean", "fv_recom"]].apply(pd.to_numeric, errors="coerce").mean(axis=1)
     return df
+
+
+CHECKS = ["Cheap vs sector", "Revenue growing", "EPS beat", "Cash flow", "Net margin"]
+
+
+def _checklist(r: pd.Series) -> list:
+    """Five yes/no tests of 'cheap AND performing'. 1 = pass, 0 = fail, None = not applicable / no data."""
+    def b(x):
+        return None if x is None or (isinstance(x, float) and np.isnan(x)) else int(bool(x))
+
+    fwd, vs = r.get("fwd_pe"), r.get("pe_vs_sector")
+    cheap = 0 if (pd.isna(fwd) or fwd <= 0) else (None if pd.isna(vs) else vs <= 0.0)
+    rev = r.get("q_rev_yoy")
+    rev = r.get("rev_growth") if pd.isna(rev) else rev
+    rev_ok = None if pd.isna(rev) else rev >= 0.10
+    sur = r.get("surprise_last")
+    eps_ok = None if pd.isna(sur) else sur >= 0.02
+    fcf, ocf = r.get("fcf_margin"), r.get("ocf_pos")
+    cash_ok = None if (pd.isna(fcf) or pd.isna(ocf)) else (fcf > 0 and ocf >= 0.75)
+    nm = r.get("net_margin")
+    margin_ok = None if pd.isna(nm) else nm >= 0.10
+    return [b(cheap), b(rev_ok), b(eps_ok), b(cash_ok), b(margin_ok)]
 
 
 def run(refresh: bool = False) -> pd.DataFrame:
@@ -132,5 +158,12 @@ def run(refresh: bool = False) -> pd.DataFrame:
     others = df[(df["section"] == "OTHER") & df["eligible"]].sort_values("buy_score", ascending=False).head(TOP_N)
     df["in_top"] = df["ticker"].isin(others["ticker"])
     df["score_rank"] = df["buy_score"].rank(ascending=False, method="min")
+
+    # "Is it cheap?" -> forward P/E relative to the sector median (only profitable companies count).
+    pe_pos = df["fwd_pe"].where(df["fwd_pe"] > 0)
+    df["pe_vs_sector"] = pe_pos / pe_pos.groupby(df["sector"]).transform("median") - 1
+    df["chk"] = df.apply(_checklist, axis=1)
+    df["chk_pass"] = df["chk"].map(lambda c: sum(x for x in c if x))
+    df["chk_total"] = df["chk"].map(lambda c: sum(1 for x in c if x is not None))
     _log(f"Done. {len(others)} stocks selected + {int(df['is_mag7'].sum())} Mag 7.")
     return df

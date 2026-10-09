@@ -29,11 +29,12 @@ MAX_UPSIDE_CAP = 0.60  # analyst upside beyond +60% is treated as +60% (targets 
 # Component weights for the final Buy Score. They are re-normalised per stock if a
 # component is entirely missing. Tune these using the back-test's per-factor IC table.
 WEIGHTS = {
-    "upside": 0.25,     # reliable analyst upside (coverage- and agreement-adjusted)
-    "momentum": 0.25,   # price trend strength
+    "upside": 0.20,     # reliable analyst upside (coverage- and agreement-adjusted)
+    "momentum": 0.20,   # price trend strength
     "value": 0.20,      # cheapness (earnings yield, PEG, FCF yield)
-    "growth": 0.15,     # revenue / earnings growth
-    "consensus": 0.15,  # analyst ratings, Zacks Rank, estimate revisions, surprises
+    "growth": 0.15,     # revenue / earnings growth, sequential revenue momentum
+    "quality": 0.15,    # net margin, free cash flow, margin trend, size of the latest EPS beat
+    "consensus": 0.10,  # analyst ratings, Zacks Rank, estimate revisions, beat history
 }
 
 # Which raw columns feed each component: (column, weight, mode)
@@ -48,10 +49,19 @@ COMPONENTS: dict[str, list[tuple[str, float, str]]] = {
         ("fcf_yield", 0.35, "sector"),
     ],
     "growth": [
-        ("rev_growth", 0.35, "rank"),
-        ("eps_growth", 0.25, "rank"),
-        ("fwd_eps_growth", 0.25, "rank"),
-        ("ltg", 0.15, "rank"),
+        ("rev_growth", 0.30, "rank"),
+        ("eps_growth", 0.20, "rank"),
+        ("fwd_eps_growth", 0.20, "rank"),
+        ("ltg", 0.10, "rank"),
+        ("rev_qoq", 0.10, "abs"),       # latest quarter vs previous quarter
+        ("rev_seq_up", 0.10, "abs"),    # share of the last 3 quarters where revenue rose sequentially
+    ],
+    "quality": [
+        ("net_margin", 0.20, "abs"),
+        ("fcf_margin", 0.30, "abs"),    # trailing-4-quarter free cash flow / revenue (not used for banks)
+        ("ocf_pos", 0.10, "abs"),       # share of last 4 quarters with positive operating cash flow
+        ("margin_chg", 0.15, "abs"),    # net margin now vs ~1 year ago
+        ("surprise_last", 0.25, "abs"), # how big the latest EPS beat was
     ],
     "upside": [
         ("adj_upside", 1.0, "rank"),
@@ -85,6 +95,13 @@ ABS_SCALES: dict[str, tuple[float, float]] = {
     "surprise_avg": (-0.10, 0.15),  # mean EPS surprise over last 4 quarters
     "beat_rate": (0.25, 1.0),     # share of last 4 quarters that beat estimates
     "smart_score": (1.0, 10.0),   # TipRanks Smart Score
+    "rev_qoq": (-0.03, 0.10),
+    "rev_seq_up": (0.0, 1.0),
+    "net_margin": (0.0, 0.25),
+    "fcf_margin": (-0.05, 0.20),
+    "ocf_pos": (0.0, 1.0),
+    "margin_chg": (-0.03, 0.05),
+    "surprise_last": (-0.05, 0.15),
 }
 
 LOWER_IS_BETTER = {"peg"}

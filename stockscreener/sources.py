@@ -109,6 +109,7 @@ def yahoo_extras(ticker: str) -> dict:
         pass
     try:
         ed = t.get_earnings_dates(limit=12)
+        out["_ed"] = ed
         out.update(features.surprise_stats(ed))
         future = ed[ed["Reported EPS"].isna()].index
         if len(future):
@@ -116,6 +117,94 @@ def yahoo_extras(ticker: str) -> dict:
             out["next_earnings"] = nxt.tz_localize(None) if nxt.tzinfo else nxt
     except Exception:
         pass
+    return out
+
+
+# ---------------------------------------------------------------------------- Quarterly performance
+def _row(df: pd.DataFrame | None, names: list[str]) -> pd.Series | None:
+    if df is None or df.empty:
+        return None
+    for n in names:
+        if n in df.index:
+            s = pd.to_numeric(df.loc[n], errors="coerce")
+            s.index = pd.to_datetime(s.index).tz_localize(None) if getattr(s.index, "tz", None) else pd.to_datetime(s.index)
+            return s
+    return None
+
+
+def _jsonable(values) -> list:
+    return [None if (v is None or (isinstance(v, float) and not np.isfinite(v))) else float(v) for v in values]
+
+
+def yahoo_quarterly(ticker: str, ed: pd.DataFrame | None = None) -> dict:
+    """Last ~5 quarters of revenue, net income, cash flow and EPS actual-vs-estimate, plus summary metrics."""
+    keys = ("q_rev_yoy", "q_rev_qoq", "rev_seq_up", "net_margin", "margin_chg", "fcf_margin", "ocf_pos", "beats_4")
+    out: dict = {k: NaN for k in keys}
+    out["qdata"] = None
+    t = yf.Ticker(ticker)
+    try:
+        inc, cf = t.quarterly_income_stmt, t.quarterly_cashflow
+    except Exception:
+        return out
+    rev = _row(inc, ["Total Revenue", "Operating Revenue"])
+    if rev is None:
+        return out
+    rev = rev.dropna().sort_index().tail(5)
+    if len(rev) < 2:
+        return out
+    qs = rev.index
+
+    def aligned(df, names):
+        s = _row(df, names)
+        return s.reindex(qs) if s is not None else pd.Series(np.nan, index=qs)
+
+    ni = aligned(inc, ["Net Income", "Net Income Common Stockholders"])
+    ocf = aligned(cf, ["Operating Cash Flow", "Cash Flow From Continuing Operating Activities"])
+    fcf = aligned(cf, ["Free Cash Flow"])
+    if fcf.isna().all():
+        capex = aligned(cf, ["Capital Expenditure"])
+        fcf = ocf + capex  # capex is reported as a negative number
+
+    # Match each quarter-end to the earnings report that followed it (reports land 2-16 weeks later).
+    eps_act, eps_est, sur = [], [], []
+    rep = pd.DataFrame()
+    if ed is not None and not ed.empty:
+        rep = ed[ed["Reported EPS"].notna()].copy()
+        rep.index = pd.to_datetime(rep.index, utc=True).tz_localize(None).normalize()
+        rep = rep.sort_index()
+    for q in qs:
+        m = rep[(rep.index > q) & (rep.index <= q + pd.Timedelta(days=120))] if len(rep) else rep
+        if len(m):
+            r = m.iloc[0]
+            eps_act.append(r["Reported EPS"]); eps_est.append(r["EPS Estimate"]); sur.append(r["Surprise(%)"])
+        else:
+            eps_act.append(np.nan); eps_est.append(np.nan); sur.append(np.nan)
+
+    r = rev.to_numpy(float)
+    out["q_rev_qoq"] = float(r[-1] / r[-2] - 1) if r[-2] > 0 else NaN
+    if len(r) >= 5 and r[0] > 0:
+        out["q_rev_yoy"] = float(r[-1] / r[0] - 1)
+    if len(r) >= 4:
+        out["rev_seq_up"] = float(np.mean(np.diff(r[-4:]) > 0))
+    margin = (ni / rev).replace([np.inf, -np.inf], np.nan)
+    if pd.notna(margin.iloc[-1]):
+        out["net_margin"] = float(margin.iloc[-1])
+        first = margin.dropna()
+        if len(first) >= 2:
+            out["margin_chg"] = float(first.iloc[-1] - first.iloc[0])
+    last4 = slice(-4, None)
+    if fcf.iloc[last4].notna().sum() >= 3 and rev.iloc[last4].sum() > 0:
+        out["fcf_margin"] = float(fcf.iloc[last4].sum() / rev.iloc[last4].sum())
+    if ocf.iloc[last4].notna().sum() >= 3:
+        out["ocf_pos"] = float((ocf.iloc[last4].dropna() > 0).mean())
+    if len(rep):
+        out["beats_4"] = float((rep["Surprise(%)"].tail(4) > 0).sum())
+
+    out["qdata"] = {
+        "q": [d.strftime("%b %y") for d in qs],
+        "rev": _jsonable(r), "ni": _jsonable(ni), "ocf": _jsonable(ocf), "fcf": _jsonable(fcf),
+        "eps": _jsonable(eps_act), "est": _jsonable(eps_est), "sur": _jsonable(sur),
+    }
     return out
 
 
@@ -147,6 +236,13 @@ def perplexity_smart_score(ticker: str) -> dict:
 def enrich(ticker: str) -> dict:
     """All stage-2 data for one ticker."""
     row: dict = {"ticker": ticker}
-    for fn in (yahoo_extras, zacks, finviz, perplexity_smart_score):
+    extras = yahoo_extras(ticker)
+    ed = extras.pop("_ed", None)
+    row.update(extras)
+    try:
+        row.update(yahoo_quarterly(ticker, ed))
+    except Exception:
+        row["qdata"] = None
+    for fn in (zacks, finviz, perplexity_smart_score):
         row.update(fn(ticker))
     return row
